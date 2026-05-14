@@ -1,3 +1,5 @@
+import os
+
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import SQLAlchemyError
 
@@ -17,7 +19,7 @@ class AgreementService:
         self.pdf = pdf
 
     # =====================================================
-    # 📄 GENERATE / FETCH AGREEMENT
+    # GENERATE / FETCH AGREEMENT
     # =====================================================
     def fetch_agreement_for_user(
         self,
@@ -32,7 +34,7 @@ class AgreementService:
         try:
 
             # -------------------------------------------------
-            # 🔍 GET USER PROFILE
+            # GET USER PROFILE
             # -------------------------------------------------
             profile = (
                 db.query(UserProfile)
@@ -52,7 +54,7 @@ class AgreementService:
             user_profile_id = profile.user_id
 
             # -------------------------------------------------
-            # 🔍 FETCH APPLICATION
+            # FETCH APPLICATION
             # -------------------------------------------------
             application = (
 
@@ -92,7 +94,7 @@ class AgreementService:
             application_id = application.id
 
             # -------------------------------------------------
-            # 🔍 CHECK EXISTING AGREEMENT
+            # CHECK EXISTING AGREEMENT
             # -------------------------------------------------
             existing = (
 
@@ -122,17 +124,32 @@ class AgreementService:
                 # =============================================
                 # BLOCK UNSIGNED AGREEMENT
                 # =============================================
-                if existing.esign_status != "SIGNED":
+                if (
+                    str(
+                        existing.esign_status
+                    ).upper()
+                    != "SIGNED"
+                ):
 
                     return {
 
                         "exists": True,
 
-                        "loan_id": application_id,
+                        "agreement_id": (
+                            existing.id
+                        ),
 
-                        "status": existing.esign_status,
+                        "loan_id": (
+                            application_id
+                        ),
 
-                        "pdf_path": None,
+                        "status": (
+                            existing.esign_status
+                        ),
+
+                        "pdf_path": (
+                            existing.agreement_pdf_path
+                        ),
 
                         "signed_pdf_path": None,
 
@@ -159,12 +176,16 @@ class AgreementService:
 
                     "exists": True,
 
+                    "agreement_id": (
+                        existing.id
+                    ),
+
                     "loan_id": (
                         application_id
                     ),
 
                     "pdf_path": (
-                        existing.signed_pdf_path
+                        existing.agreement_pdf_path
                     ),
 
                     "status": (
@@ -177,7 +198,7 @@ class AgreementService:
                 }
 
             # -------------------------------------------------
-            # 🔢 VERSIONING
+            # VERSIONING
             # -------------------------------------------------
             latest = (
 
@@ -205,7 +226,7 @@ class AgreementService:
             )
 
             # -------------------------------------------------
-            # 👤 BORROWER NAME
+            # BORROWER NAME
             # -------------------------------------------------
             borrower_name = (
 
@@ -238,7 +259,7 @@ class AgreementService:
                 )
 
             # -------------------------------------------------
-            # 💰 INTEREST RATE
+            # INTEREST RATE
             # -------------------------------------------------
             interest_rate = getattr(
                 application,
@@ -252,7 +273,7 @@ class AgreementService:
             )
 
             # -------------------------------------------------
-            # 📄 GENERATE PDF
+            # GENERATE PDF
             # -------------------------------------------------
             pdf_output = (
 
@@ -290,7 +311,7 @@ class AgreementService:
             )
 
             # -------------------------------------------------
-            # ❗ DEACTIVATE OLD AGREEMENTS
+            # DEACTIVATE OLD AGREEMENTS
             # -------------------------------------------------
             (
                 db.query(Agreement)
@@ -310,7 +331,7 @@ class AgreementService:
             )
 
             # -------------------------------------------------
-            # 💾 SAVE AGREEMENT
+            # SAVE AGREEMENT
             # -------------------------------------------------
             agreement = Agreement(
 
@@ -322,11 +343,19 @@ class AgreementService:
 
                 agreement_pdf_path=file_path,
 
+                agreement_file_name=(
+                    os.path.basename(file_path)
+                ),
+
                 file_hash=file_hash,
 
                 is_active=True,
 
-                esign_status="PENDING",
+                status="GENERATED",
+
+                esign_status="INITIATED",
+
+                provider="EMUDHRA",
 
                 signed_pdf_path=None
             )
@@ -334,7 +363,7 @@ class AgreementService:
             db.add(agreement)
 
             # -------------------------------------------------
-            # 🔄 UPDATE APPLICATION STATUS
+            # UPDATE APPLICATION STATUS
             # -------------------------------------------------
             application.application_status = (
                 "AGREEMENT_GENERATED"
@@ -353,11 +382,17 @@ class AgreementService:
 
                 "exists": False,
 
+                "agreement_id": (
+                    agreement.id
+                ),
+
                 "loan_id": (
                     application_id
                 ),
 
-                "pdf_path": None,
+                "pdf_path": (
+                    agreement.agreement_pdf_path
+                ),
 
                 "status": (
                     agreement.esign_status
@@ -412,7 +447,7 @@ class AgreementService:
             )
 
     # =====================================================
-    # 📄 GET EXISTING AGREEMENT
+    # GET EXISTING AGREEMENT
     # =====================================================
     def get_existing_agreement(
         self,
@@ -502,9 +537,18 @@ class AgreementService:
             # =============================================
             # BLOCK UNSIGNED ACCESS
             # =============================================
-            if agreement.esign_status != "SIGNED":
+            if (
+                str(
+                    agreement.esign_status
+                ).upper()
+                != "SIGNED"
+            ):
 
                 return {
+
+                    "agreement_id": (
+                        agreement.id
+                    ),
 
                     "message": (
                         "Please complete e-sign "
@@ -513,6 +557,10 @@ class AgreementService:
 
                     "status": (
                         agreement.esign_status
+                    ),
+
+                    "pdf_path": (
+                        agreement.agreement_pdf_path
                     ),
 
                     "signed_pdf_path": None
@@ -525,6 +573,10 @@ class AgreementService:
 
                 return {
 
+                    "agreement_id": (
+                        agreement.id
+                    ),
+
                     "message": (
                         "Signed agreement "
                         "not available"
@@ -532,6 +584,10 @@ class AgreementService:
 
                     "status": (
                         agreement.esign_status
+                    ),
+
+                    "pdf_path": (
+                        agreement.agreement_pdf_path
                     ),
 
                     "signed_pdf_path": None
@@ -542,12 +598,20 @@ class AgreementService:
             # =============================================
             return {
 
+                "agreement_id": (
+                    agreement.id
+                ),
+
                 "loan_id": (
                     application.id
                 ),
 
                 "status": (
                     agreement.esign_status
+                ),
+
+                "pdf_path": (
+                    agreement.agreement_pdf_path
                 ),
 
                 "signed_pdf_path": (

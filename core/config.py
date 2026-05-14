@@ -1,4 +1,5 @@
 from functools import lru_cache
+import os
 from pathlib import Path
 from typing import List, Optional
  
@@ -142,19 +143,36 @@ class Settings(BaseSettings):
     # ESIGN
     # ============================================================
     AGREEMENT_STORAGE_PATH: str = "storage/generated_pdfs"
+
     SIGNED_PDF_PATH: str = "storage/signed_pdfs"
- 
-    ESIGN_PROVIDER: str = "eMudhra"
- 
-    LOAN_SERVICE_BASE_URL: str = "http://localhost:8000/api/v1/loans"
- 
+
+    ESIGN_PROVIDER: str = "EMUDHRA"
+
+    ESIGN_MOCK_MODE: bool = True
+
+    LOAN_SERVICE_BASE_URL: str = (
+        "http://localhost:8000/api/v1/loans"
+    )
+
+    # ============================================================
+    # EMUDHRA
+    # ============================================================
+    EMUDHRA_BASE_URL: str = ""
+
+    EMUDHRA_CLIENT_ID: str = ""
+
+    EMUDHRA_CLIENT_SECRET: str = ""
+
+    EMUDHRA_CALLBACK_URL: str = ""
+
+    EMUDHRA_REDIRECT_URL: str = ""
+    
     # ============================================================
     # MODULE INTEGRATION
     # ============================================================
     MODULE_7_URL: Optional[str] = "http://localhost:8001"
     MODULE_8_URL: Optional[str] = "http://localhost:8002"
- 
-    # ============================================================
+        # ============================================================
     # COMPUTED
     # ============================================================
     @property

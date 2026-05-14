@@ -49,7 +49,9 @@ from routers.Loan_application.lender_dashboard_router import router as lender_da
 from routers.Loan_application.razorpayx_webhook import router as razorpayx_webhook_router
 from routers.Loan_application.user_predisbursement_router import router as user_predisbursement_router
 from routers.Loan_application.loan_application_submit_router import router as loan_application_submit_router
-
+from routers.Loan_application.disbursement_status_router import (
+    router as disbursement_status_router
+)
 # ------------------- TRACKING -------------------
 from routers.Tracking.tracking_router import router as tracking_router
 #from routers.Tracking.reupload_router import router as reupload_router
@@ -165,6 +167,7 @@ app.include_router(loan_application_submit_router)
 app.include_router(user_predisbursement_router)
 app.include_router(lender_dashboard_router)
 app.include_router(razorpayx_webhook_router)
+app.include_router(disbursement_status_router)
 
 app.include_router(tracking_router)
 app.include_router(reupload_router)

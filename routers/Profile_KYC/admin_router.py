@@ -51,7 +51,6 @@ from schemas.Profile_KYC.document_schema import (
     ReviewAction
 )
 
-
 # =====================================================
 # ROUTER
 # =====================================================
@@ -64,6 +63,152 @@ router = APIRouter(
 
 
 # =====================================================
+# GET ALL UNDER REVIEW USERS
+# =====================================================
+@router.get("/documents/under-review")
+def get_under_review_documents(
+
+    db: Session = Depends(get_db),
+
+    current_admin: User = Depends(
+        require_roles("SUPER_ADMIN")
+    ),
+):
+
+    documents = (
+        DocumentUploadRepository
+        .get_under_review_documents(
+            db=db
+        )
+    )
+
+    grouped_users = {}
+
+    for doc in documents:
+
+        if doc.user_id not in grouped_users:
+
+            grouped_users[doc.user_id] = {
+
+                "user_id":
+                    doc.user_id,
+
+                "email":
+                    doc.email,
+
+                "under_review_count":
+                    0,
+            }
+
+        grouped_users[doc.user_id][
+            "under_review_count"
+        ] += 1
+
+    return {
+
+        "total_users":
+            len(grouped_users),
+
+        "users":
+            list(grouped_users.values())
+    }
+
+
+# =====================================================
+# GET USER PENDING DOCUMENTS
+# =====================================================
+@router.get(
+    "/users/{user_id}/pending-documents"
+)
+def get_user_pending_documents(
+
+    user_id: int,
+
+    db: Session = Depends(get_db),
+
+    current_admin: User = Depends(
+        require_roles("SUPER_ADMIN")
+    ),
+):
+
+    user = (
+        UserRepository.get_by_user_id(
+            db,
+            user_id
+        )
+    )
+
+    if not user:
+
+        raise HTTPException(
+
+            status_code=404,
+
+            detail="User not found"
+        )
+
+    documents = (
+        DocumentUploadRepository
+        .get_user_under_review_documents(
+            db,
+            user_id
+        )
+    )
+
+    return {
+
+        "user_id":
+            user.user_id,
+
+        "email":
+            user.email,
+
+        "total_pending_documents":
+            len(documents),
+
+        "documents": [
+
+            {
+
+                "document_id":
+                    doc.id,
+
+                "document_type":
+                    (
+                        doc.document_type.value
+                    ),
+
+                "status":
+                    (
+                        doc.status.value
+                    ),
+
+                "match_score":
+                    doc.match_score,
+
+                "ocr_verified":
+                    doc.ocr_verified,
+
+                "file_url":
+                    doc.file_path,
+
+                "uploaded_at":
+                    (
+                        doc.uploaded_at.isoformat()
+                        if doc.uploaded_at
+                        else None
+                    ),
+
+                "admin_remarks":
+                    doc.admin_remarks,
+            }
+
+            for doc in documents
+        ]
+    }
+
+
+# =====================================================
 # REVIEW DOCUMENT
 # =====================================================
 @router.post(
@@ -72,6 +217,8 @@ router = APIRouter(
     response_model=DocumentReviewResponse
 )
 def review_document(
+
+    user_id: int = Form(...),
 
     document_id: int = Form(...),
 
@@ -102,6 +249,21 @@ def review_document(
                 status_code=404,
 
                 detail=f"Document {document_id} not found"
+            )
+
+        # =========================================
+        # USER VALIDATION
+        # =========================================
+        if document.user_id != user_id:
+
+            raise HTTPException(
+
+                status_code=400,
+
+                detail=(
+                    "Document does not belong "
+                    "to provided user_id"
+                )
             )
 
         # =========================================
@@ -138,7 +300,20 @@ def review_document(
                     )
                 )
 
-            document.status = DocumentStatus.REJECTED
+            updated_document = (
+                DocumentUploadRepository
+                .admin_update_document(
+                    db=db,
+
+                    document_id=document_id,
+
+                    new_status=DocumentStatus.REJECTED,
+
+                    admin_remarks=admin_remarks,
+
+                    reviewed_by=current_admin.username
+                )
+            )
 
             message = (
                 f"Document rejected: "
@@ -150,21 +325,33 @@ def review_document(
         # =========================================
         else:
 
-            document.status = DocumentStatus.APPROVED
+            updated_document = (
+                DocumentUploadRepository
+                .admin_update_document(
+                    db=db,
+
+                    document_id=document_id,
+
+                    new_status=DocumentStatus.APPROVED,
+
+                    admin_remarks=admin_remarks,
+
+                    reviewed_by=current_admin.username
+                )
+            )
 
             message = (
                 "Document approved successfully"
             )
 
-        document.admin_remarks = admin_remarks
+        if not updated_document:
 
-        document.reviewed_at = datetime.now(
-            timezone.utc
-        )
+            raise HTTPException(
 
-        document.reviewed_by = (
-            current_admin.username
-        )
+                status_code=404,
+
+                detail="Document not found"
+            )
 
         # =========================================
         # PROFILE UPDATE
@@ -173,7 +360,7 @@ def review_document(
 
             db,
 
-            document.user_id
+            updated_document.user_id
         )
 
         kyc_completed = False
@@ -181,7 +368,8 @@ def review_document(
         if profile:
 
             all_docs = (
-                DocumentUploadRepository.get_by_user_id(
+                DocumentUploadRepository
+                .get_user_documents(
 
                     db,
 
@@ -253,18 +441,6 @@ def review_document(
 
                 profile.document_status = "UPLOADED"
 
-        # =========================================
-        # SAVE
-        # =========================================
-        DocumentUploadRepository.update_document(
-
-            db,
-
-            document
-        )
-
-        if profile:
-
             UserRepository.update_user(
 
                 db,
@@ -275,16 +451,16 @@ def review_document(
         return DocumentReviewResponse(
 
             document_id=
-                document.id,
+                updated_document.id,
 
             document_type=
-                document.document_type.value,
+                updated_document.document_type.value,
 
             user_email=
-                document.email,
+                updated_document.email,
 
             status=
-                document.status.value,
+                updated_document.status.value,
 
             message=
                 message,
@@ -328,32 +504,37 @@ def get_document_stats(
 ):
 
     total_docs = (
-        DocumentUploadRepository.count_all(db)
+        DocumentUploadRepository
+        .count_all(db)
     )
 
     uploaded = (
-        DocumentUploadRepository.count_by_status(
+        DocumentUploadRepository
+        .count_by_status(
             db,
             DocumentStatus.UPLOADED
         )
     )
 
     under_review = (
-        DocumentUploadRepository.count_by_status(
+        DocumentUploadRepository
+        .count_by_status(
             db,
             DocumentStatus.UNDER_REVIEW
         )
     )
 
     approved = (
-        DocumentUploadRepository.count_by_status(
+        DocumentUploadRepository
+        .count_by_status(
             db,
             DocumentStatus.APPROVED
         )
     )
 
     rejected = (
-        DocumentUploadRepository.count_by_status(
+        DocumentUploadRepository
+        .count_by_status(
             db,
             DocumentStatus.REJECTED
         )
@@ -549,7 +730,7 @@ def get_user_details(
         )
 
     documents = (
-        DocumentUploadRepository.get_by_user_id(
+        DocumentUploadRepository.get_user_documents(
 
             db,
 
@@ -574,6 +755,9 @@ def get_user_details(
 
                 "file_name":
                     doc.file_name,
+
+                "file_url":
+                    doc.file_path,
 
                 "file_size":
                     doc.file_size,

@@ -1,51 +1,159 @@
-from typing import Dict, Any
-import json
+import uuid
+import httpx
 
-from providers.base_provider import BaseESignProvider
-from providers.provider_client import ProviderClient
+from core.config import settings
 
 
-class EmudhraProvider(BaseESignProvider):
-    """
-    Real eMudhra provider implementation.
-    Handles mapping between eMudhra API and internal system format.
-    """
+class EmudhraProvider:
 
-    def __init__(self):
-        self.client = ProviderClient()
+    # =================================================
+    # INITIATE
+    # =================================================
+    async def initiate_esign(
+        self,
+        payload: dict
+    ):
 
-    async def initiate_esign(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        resp = await self.client.post("/esign/initiate", payload)
+        # =============================================
+        # MOCK MODE
+        # =============================================
+        if settings.ESIGN_MOCK_MODE:
 
-        return {
-            "transaction_id": resp.get("txnId"),
-            "masked_aadhaar": resp.get("maskedAadhaar"),
-            "status": resp.get("status", "OTP_SENT"),
+            return {
+
+                "transaction_id": (
+                    str(uuid.uuid4())
+                ),
+
+                "status": "OTP_SENT",
+
+                "masked_aadhaar": (
+                    "XXXX-XXXX-4587"
+                ),
+
+                "provider": "EMUDHRA",
+
+                "message": (
+                    "Mock OTP sent successfully"
+                )
+            }
+
+        # =============================================
+        # PROD API
+        # =============================================
+        request_payload = {
+
+            "aadhaar_number": (
+                payload["aadhaar_number"]
+            ),
+
+            "reference_id": (
+                str(uuid.uuid4())
+            ),
+
+            "callback_url": (
+                settings.EMUDHRA_CALLBACK_URL
+            ),
+
+            "redirect_url": (
+                settings.EMUDHRA_REDIRECT_URL
+            ),
         }
 
-    async def verify_esign(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        resp = await self.client.post("/esign/verify", payload)
+        headers = {
 
-        return {
-            "transaction_id": resp.get("txnId"),
-            "status": resp.get("status"),
-            "signed_pdf_url": resp.get("signedPdfUrl"),
+            "client_id": (
+                settings.EMUDHRA_CLIENT_ID
+            ),
+
+            "client_secret": (
+                settings.EMUDHRA_CLIENT_SECRET
+            ),
         }
 
-    async def verify_callback(self, raw_body: bytes) -> Dict[str, Any]:
-        """
-        Parse provider callback payload and convert it to internal format.
-        """
-        data = json.loads(raw_body)
+        async with httpx.AsyncClient(
+            timeout=30
+        ) as client:
 
-        return {
-            "transaction_id": data.get("txnId"),
-            "status": data.get("status"),
-            "signed_pdf_url": data.get("signedPdfUrl"),
+            response = await client.post(
+
+                f"{settings.EMUDHRA_BASE_URL}/initiate",
+
+                json=request_payload,
+
+                headers=headers
+            )
+
+        response.raise_for_status()
+
+        return response.json()
+
+    # =================================================
+    # VERIFY OTP
+    # =================================================
+    async def verify_esign(
+        self,
+        payload: dict
+    ):
+
+        # =============================================
+        # MOCK MODE
+        # =============================================
+        if settings.ESIGN_MOCK_MODE:
+
+            if payload.get("otp") != "123456":
+
+                return {
+                    "status": "FAILED"
+                }
+
+            return {
+
+                "status": "SIGNED",
+
+                "provider": "EMUDHRA",
+
+                "signed_pdf_url": (
+                    "mock/signed_agreement.pdf"
+                )
+            }
+
+        # =============================================
+        # PROD API
+        # =============================================
+        request_payload = {
+
+            "transaction_id": (
+                payload["transaction_id"]
+            ),
+
+            "otp": payload["otp"]
         }
 
-    async def download_signed_pdf(self, url: str) -> bytes:
-        """
-        Download signed PDF from provider.
-        """
-        return await self.client.get_file(url)
+        headers = {
+
+            "client_id": (
+                settings.EMUDHRA_CLIENT_ID
+            ),
+
+            "client_secret": (
+                settings.EMUDHRA_CLIENT_SECRET
+            ),
+        }
+
+        async with httpx.AsyncClient(
+            timeout=30
+        ) as client:
+
+            response = await client.post(
+
+                f"{settings.EMUDHRA_BASE_URL}/verify",
+
+                json=request_payload,
+
+                headers=headers
+            )
+
+        response.raise_for_status()
+
+        return response.json()

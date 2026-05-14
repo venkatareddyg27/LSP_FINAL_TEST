@@ -37,6 +37,10 @@ from repositories.Profile_KYC.document_upload_repository import (
     DocumentUploadRepository
 )
 
+from repositories.Profile_KYC.kyc_bank_verification_repository import (
+    KYCBankVerificationRepository
+)
+
 # =========================================================
 # SOCKET TIMEOUT
 # =========================================================
@@ -106,7 +110,6 @@ ALLOWED_MIME_TYPES = {
 # OCR SCORE THRESHOLDS
 # =========================================================
 SCORE_APPROVE = 90
-SCORE_UNDER_REVIEW = 70
 
 
 class DocumentUploadService:
@@ -276,7 +279,8 @@ class DocumentUploadService:
     def _validate_ocr(
         doc_type: DocumentType,
         raw_text: str,
-        user
+        user,
+        bank_record=None
     ):
 
         if doc_type == DocumentType.PAN_CARD:
@@ -288,17 +292,42 @@ class DocumentUploadService:
                 )
             )
 
-        elif doc_type in [
-
-            DocumentType.AADHAAR_FRONT,
-
-            DocumentType.AADHAAR_BACK
-        ]:
+        elif doc_type == DocumentType.AADHAAR_FRONT:
 
             return (
                 KYCService.process_aadhaar(
                     raw_text,
                     user
+                )
+            )
+
+        elif doc_type == DocumentType.AADHAAR_BACK:
+
+            return {
+
+                "comparison": {
+                    "verified": True
+                },
+
+                "failed_reasons": []
+            }
+
+        elif doc_type == DocumentType.SALARY_SLIP:
+
+            return (
+                KYCService.process_salary_slip(
+                    raw_text,
+                    user
+                )
+            )
+
+        elif doc_type == DocumentType.BANK_STATEMENT:
+
+            return (
+                KYCService.process_bank_statement(
+                    raw_text,
+                    user,
+                    bank_record
                 )
             )
 
@@ -358,17 +387,8 @@ class DocumentUploadService:
                 DocumentStatus.APPROVED
             )
 
-        if (
-            score >= SCORE_UNDER_REVIEW
-            and score < SCORE_APPROVE
-        ):
-
-            return (
-                DocumentStatus.UNDER_REVIEW
-            )
-
         return (
-            DocumentStatus.REJECTED
+            DocumentStatus.UNDER_REVIEW
         )
 
     # =====================================================
@@ -463,80 +483,9 @@ class DocumentUploadService:
                     detail="Unauthorized access"
                 )
 
-            # =============================================
-            # DELETE FROM CLOUDINARY
-            # =============================================
-            try:
-
-                extracted_data = (
-                    document.extracted_data
-                    or {}
-                )
-
-                cloudinary_public_id = (
-                    extracted_data.get(
-                        "cloudinary_public_id"
-                    )
-                )
-
-                if cloudinary_public_id:
-
-                    # =====================================
-                    # DETECT RESOURCE TYPE
-                    # =====================================
-                    resource_type = "image"
-
-                    if document.file_name:
-
-                        lower_name = (
-                            document.file_name.lower()
-                        )
-
-                        if lower_name.endswith(".pdf"):
-
-                            resource_type = "raw"
-
-                    # =====================================
-                    # DELETE FILE
-                    # =====================================
-                    cloudinary.uploader.destroy(
-                        cloudinary_public_id,
-                        resource_type=resource_type
-                    )
-
-                    logger.info(
-                        f"[CLOUDINARY DELETE] "
-                        f"public_id="
-                        f"{cloudinary_public_id}, "
-                        f"resource_type="
-                        f"{resource_type}"
-                    )
-
-            except Exception as cloudinary_error:
-
-                logger.exception(
-                    "[CLOUDINARY DELETE ERROR]"
-                )
-
-                raise HTTPException(
-                    status_code=500,
-                    detail=(
-                        f"Cloudinary delete failed: "
-                        f"{str(cloudinary_error)}"
-                    )
-                )
-            # =============================================
-            # DELETE DB RECORD
-            # =============================================
             DocumentUploadRepository.delete_document(
                 db=db,
                 document=document
-            )
-
-            logger.info(
-                f"[DOCUMENT DELETED] "
-                f"user={user_id}, "
-                f"document_id={document_id}"
             )
 
             return {
@@ -599,13 +548,10 @@ class DocumentUploadService:
 
         file_size = len(content)
 
-        (
-            DocumentUploadService
-            ._validate_file(
-                file,
-                doc_type,
-                file_size
-            )
+        DocumentUploadService._validate_file(
+            file,
+            doc_type,
+            file_size
         )
 
         safe_filename = re.sub(
@@ -632,15 +578,7 @@ class DocumentUploadService:
 
                 f.write(content)
 
-            # =============================================
-            # SKIP OCR FOR INCOME DOCS
-            # =============================================
-            if doc_type in [
-
-                DocumentType.SALARY_SLIP,
-
-                DocumentType.BANK_STATEMENT
-            ]:
+            if doc_type == DocumentType.AADHAAR_BACK:
 
                 raw_text = ""
 
@@ -660,12 +598,25 @@ class DocumentUploadService:
                     ._run_ocr(temp_path)
                 )
 
+                bank_record = None
+
+                if doc_type == DocumentType.BANK_STATEMENT:
+
+                    bank_record = (
+                        KYCBankVerificationRepository
+                        .get_verified_record(
+                            db,
+                            user_id
+                        )
+                    )
+
                 validation_result = (
                     DocumentUploadService
                     ._validate_ocr(
                         doc_type,
                         raw_text,
-                        user
+                        user,
+                        bank_record
                     )
                 )
 
@@ -697,8 +648,7 @@ class DocumentUploadService:
                     temp_path=temp_path,
 
                     folder=(
-                        f"loan_kyc/"
-                        f"{user_id}"
+                        f"loan_kyc/{user_id}"
                     ),
 
                     public_id=public_id
@@ -712,23 +662,25 @@ class DocumentUploadService:
 
                     user_id=user_id,
 
+                    email=user.email,
+
                     document_type=doc_type,
 
                     file_name=safe_filename,
 
-                    file_url=(
-                        upload_result["url"]
-                    ),
+                    file_path=upload_result["url"],
+
+                    file_size=file_size,
+
+                    mime_type=file.content_type,
 
                     cloudinary_public_id=(
-                        upload_result[
-                            "public_id"
-                        ]
+                        upload_result["public_id"]
                     ),
 
                     status=status,
 
-                    verification_score=score,
+                    match_score=float(score),
 
                     ocr_text=(
                         raw_text[:10000]
@@ -736,14 +688,13 @@ class DocumentUploadService:
                         else None
                     ),
 
-                    rejection_reason=(
+                    admin_remarks=(
                         ", ".join(
-                            validation_result
-                            .get(
+                            validation_result.get(
                                 "failed_reasons",
                                 []
                             )
-                        )
+                        ) or None
                     ),
 
                     uploaded_at=(
@@ -754,29 +705,36 @@ class DocumentUploadService:
                 )
             )
 
+            ocr_verified = (
+
+                1
+
+                if validation_result
+                .get("comparison", {})
+                .get("verified", False)
+
+                else 0
+            )
+
+            document.ocr_verified = ocr_verified
+
+            db.commit()
+
             return {
 
-                "document_id": (
-                    document.id
-                ),
+                "document_id": document.id,
 
-                "document_type": (
-                    doc_type.value
-                ),
+                "document_type": doc_type.value,
 
-                "status": (
-                    status.value
-                ),
+                "status": status.value,
 
                 "score": score,
 
-                "file_url": (
-                    document.file_path
-                ),
+                "ocr_verified": ocr_verified,
 
-                "validation": (
-                    validation_result
-                ),
+                "file_url": document.file_path,
+
+                "validation": validation_result,
 
                 "message": (
                     "Document uploaded successfully"
@@ -785,9 +743,7 @@ class DocumentUploadService:
 
         finally:
 
-            if os.path.exists(
-                temp_path
-            ):
+            if os.path.exists(temp_path):
 
                 os.remove(temp_path)
 
@@ -820,22 +776,13 @@ class DocumentUploadService:
 
         files = {
 
-            DocumentType.PAN_CARD: (
-                pan_card
-            ),
+            DocumentType.PAN_CARD: pan_card,
 
-            DocumentType.AADHAAR_FRONT: (
-                aadhaar_front
-            ),
+            DocumentType.AADHAAR_FRONT: aadhaar_front,
 
-            DocumentType.AADHAAR_BACK: (
-                aadhaar_back
-            ),
+            DocumentType.AADHAAR_BACK: aadhaar_back,
         }
 
-        # =============================================
-        # INCOME PROOF
-        # =============================================
         if income_proof and income_type:
 
             if income_type == "SALARY_SLIP":
@@ -862,9 +809,6 @@ class DocumentUploadService:
                 DocumentType.BANK_STATEMENT
             ] = bank_statement
 
-        # =============================================
-        # PROCESS FILES
-        # =============================================
         for doc_type, file in files.items():
 
             if not file:
@@ -916,15 +860,106 @@ class DocumentUploadService:
                 detail="No documents uploaded"
             )
 
+        user = (
+            UserRepository
+            .get_by_user_id(
+                db,
+                user_id
+            )
+        )
+
+        documents = (
+            DocumentUploadRepository
+            .get_user_documents(
+                db=db,
+                user_id=user_id
+            )
+        )
+
+        uploaded_doc_types = []
+
+        for doc in documents:
+
+            doc_type = (
+                doc.document_type.value
+                if hasattr(
+                    doc.document_type,
+                    "value"
+                )
+                else str(
+                    doc.document_type
+                )
+            )
+
+            if str(doc.status) != "REJECTED":
+
+                uploaded_doc_types.append(
+                    doc_type
+                )
+
+        required_documents = [
+
+            DocumentType.PAN_CARD.value,
+
+            DocumentType.AADHAAR_FRONT.value,
+
+            DocumentType.AADHAAR_BACK.value,
+        ]
+
+        income_type = getattr(
+            user,
+            "income_type",
+            None
+        )
+
+        if hasattr(
+            income_type,
+            "value"
+        ):
+
+            income_type = (
+                income_type.value
+            )
+
+        if income_type:
+
+            income_type = (
+                str(income_type)
+                .strip()
+                .upper()
+            )
+
+        if income_type == "SALARY_SLIP":
+
+            required_documents.append(
+                DocumentType.SALARY_SLIP.value
+            )
+
+        elif income_type == "BANK_STATEMENT":
+
+            required_documents.append(
+                DocumentType.BANK_STATEMENT.value
+            )
+
+        missing_documents = [
+
+            doc
+
+            for doc in required_documents
+
+            if doc not in uploaded_doc_types
+        ]
+
         return {
 
-            "uploaded_documents": (
-                uploaded_documents
+            "user_id": user_id,
+
+            "email": (
+                user.email
+                if user else None
             ),
 
-            "failed_documents": (
-                failed_documents
-            ),
+            "uploaded_documents": uploaded_documents,
 
             "total_uploaded": (
                 len(uploaded_documents)
@@ -932,6 +967,18 @@ class DocumentUploadService:
 
             "total_failed": (
                 len(failed_documents)
+            ),
+
+            "failed_documents": (
+                failed_documents
+            ),
+
+            "missing_documents": (
+                missing_documents
+            ),
+
+            "all_required_uploaded": (
+                len(missing_documents) == 0
             ),
 
             "message": (
@@ -1007,21 +1054,22 @@ class DocumentUploadService:
 
             response_documents.append({
 
-                "id": (
-                    doc.id
+                "id": doc.id,
+
+                "document_type": doc_type,
+
+                "file_name": doc.file_name,
+
+                "file_size": (
+                    doc.file_size
+                    if hasattr(
+                        doc,
+                        "file_size"
+                    )
+                    else 0
                 ),
 
-                "document_type": (
-                    doc_type
-                ),
-
-                "file_name": (
-                    doc.file_name
-                ),
-
-                "file_url": (
-                    doc.file_path
-                ),
+                "file_url": doc.file_path,
 
                 "status": (
 
@@ -1037,9 +1085,66 @@ class DocumentUploadService:
                     )
                 ),
 
+                "match_score": (
+
+                    float(doc.match_score)
+
+                    if getattr(
+                        doc,
+                        "match_score",
+                        None
+                    ) is not None
+
+                    else 0
+                ),
+
+                "ocr_verified": (
+
+                    doc.ocr_verified
+                ),
+
                 "uploaded_at": (
                     doc.uploaded_at
                 ),
+
+                "reviewed_at": (
+
+                    doc.reviewed_at
+
+                    if getattr(
+                        doc,
+                        "reviewed_at",
+                        None
+                    )
+
+                    else None
+                ),
+
+                "admin_remarks": (
+
+                    doc.admin_remarks
+
+                    if getattr(
+                        doc,
+                        "admin_remarks",
+                        None
+                    )
+
+                    else None
+                ),
+
+                "failed_reasons": (
+
+                    [doc.admin_remarks]
+
+                    if getattr(
+                        doc,
+                        "admin_remarks",
+                        None
+                    )
+
+                    else []
+                )
             })
 
         required_documents = [
@@ -1097,17 +1202,11 @@ class DocumentUploadService:
 
         return {
 
-            "user_id": (
-                user_id
-            ),
+            "user_id": user_id,
 
-            "email": (
-                user.email
-            ),
+            "email": user.email,
 
-            "documents": (
-                response_documents
-            ),
+            "documents": response_documents,
 
             "total_documents": (
                 len(response_documents)

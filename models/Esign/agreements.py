@@ -74,7 +74,13 @@ class Agreement(Base):
     # 🔗 RELATIONSHIP
     # =====================================================
     loan = relationship("LoanApplication", back_populates="agreements")
-
+    # =====================================================
+    # ESIGN SESSIONS
+    # =====================================================
+    esign_sessions = relationship(
+        "EsignSession",
+        back_populates="agreement",
+        cascade="all, delete-orphan")
     # =====================================================
     # 🔥 INDEXES
     # =====================================================

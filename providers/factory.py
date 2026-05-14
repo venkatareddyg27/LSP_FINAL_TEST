@@ -1,29 +1,100 @@
 from core.config import settings
-from providers.mock_provider import MockESignProvider
-from providers.emudhra_provider import EmudhraProvider
+
+from core.logger import logger
+
+from providers.mock_provider import (
+    MockESignProvider
+)
+
+from providers.emudhra_provider import (
+    EmudhraProvider
+)
 
 
 def get_esign_provider():
     """
-    Factory to load the correct eSign provider implementation.
+    Factory to load the correct
+    eSign provider implementation.
     """
 
-    env = settings.ENV.upper()
-    provider = settings.ESIGN_PROVIDER.lower()
+    env = (
+        settings.ENV
+        .strip()
+        .upper()
+    )
 
-    # Development environment → mock provider
-    if env == "DEV":
+    provider = (
+        settings.ESIGN_PROVIDER
+        .strip()
+        .lower()
+    )
+
+    mock_mode = getattr(
+        settings,
+        "ESIGN_MOCK_MODE",
+        False
+    )
+
+    logger.info(
+        f"[ESIGN FACTORY] "
+        f"env={env}, "
+        f"provider={provider}, "
+        f"mock={mock_mode}"
+    )
+
+    # =================================================
+    # FORCE MOCK MODE
+    # =================================================
+    if mock_mode:
+
+        logger.warning(
+            "[ESIGN] MOCK MODE ENABLED"
+        )
+
         return MockESignProvider()
 
-    # Production providers
+    # =================================================
+    # DEVELOPMENT
+    # =================================================
+    if env in [
+
+        "DEV",
+
+        "LOCAL",
+
+        "DEVELOPMENT"
+    ]:
+
+        logger.warning(
+            "[ESIGN] DEV MODE MOCK PROVIDER"
+        )
+
+        return MockESignProvider()
+
+    # =================================================
+    # EMUDHRA
+    # =================================================
     if provider == "emudhra":
+
+        logger.info(
+            "[ESIGN] USING EMUDHRA"
+        )
+
         return EmudhraProvider()
 
-    # Future providers
-    # elif provider == "nsdl":
+    # =================================================
+    # FUTURE PROVIDERS
+    # =================================================
+    # if provider == "nsdl":
     #     return NSDLProvider()
 
-    # elif provider == "digio":
+    # if provider == "digio":
     #     return DigioProvider()
 
-    raise ValueError(f"Unsupported eSign provider: {provider}")
+    # =================================================
+    # UNSUPPORTED
+    # =================================================
+    raise ValueError(
+        f"Unsupported eSign provider: "
+        f"{provider}"
+    )

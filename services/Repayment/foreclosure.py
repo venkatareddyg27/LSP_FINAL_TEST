@@ -19,6 +19,10 @@ from models.Loan_application.loan_application import (
     LoanApplication
 )
 
+from models.Loan_application.loan_application_steps import (
+    LoanApplicationStepTracker
+)
+
 from services.payment.razorpay_service import (
     RazorpayService
 )
@@ -549,9 +553,6 @@ def process_foreclosure_webhook(
             str(amount)
         )
 
-        # =================================================
-        # FORECLOSURE BREAKUP
-        # =================================================
         txn.principal = Decimal(
             str(foreclosure.outstanding or 0)
         )
@@ -649,15 +650,54 @@ def process_foreclosure_webhook(
 
         if loan:
 
-            loan.application_status = "CLOSED"
+            # =============================================
+            # CLOSE APPLICATION
+            # =============================================
+            loan.application_status = (
+                "CLOSED"
+            )
 
+            loan.current_step = (
+                "CLOSED"
+            )
+
+            # =============================================
+            # UPDATE STEP TRACKER
+            # =============================================
+            tracker = db.query(
+                LoanApplicationStepTracker
+            ).filter(
+                LoanApplicationStepTracker.application_id
+                == loan.id
+            ).first()
+
+            if tracker:
+
+                tracker.current_step = (
+                    "CLOSED"
+                )
+
+                tracker.last_completed_step = (
+                    "CLOSED"
+                )
+
+                db.add(tracker)
+
+            # =============================================
+            # OPTIONAL LOAN STATUS
+            # =============================================
             if hasattr(
                 loan,
                 "loan_status"
             ):
 
-                loan.loan_status = "FORECLOSED"
+                loan.loan_status = (
+                    "FORECLOSED"
+                )
 
+            # =============================================
+            # CLOSED DATE
+            # =============================================
             if hasattr(
                 loan,
                 "closed_date"

@@ -15,6 +15,14 @@ from models.Profile_KYC.user_profile import (
     UserProfile
 )
 
+from models.Repayment.emi_scheduled import (
+    EMISchedule
+)
+
+from models.Repayment.foreclosure import (
+    ForeclosureRequest
+)
+
 from core.enums import (
     LoanApplicationStatus,
     LoanApplicationStep,
@@ -222,9 +230,71 @@ class LoanApplicationService:
             application
         )
 
+        # =============================================
+        # DISBURSED AMOUNT
+        # =============================================
+        disbursed_amount = None
+
+        if application.disbursed_amount:
+
+            disbursed_amount = float(
+                application.disbursed_amount
+            )
+
+        # =============================================
+        # EMI DETAILS
+        # =============================================
+        total_emis = db.query(
+            EMISchedule
+        ).filter(
+            EMISchedule.application_id
+            == application.id
+        ).count()
+
+        emis_paid = db.query(
+            EMISchedule
+        ).filter(
+
+            EMISchedule.application_id
+            == application.id,
+
+            EMISchedule.status
+            == "PAID"
+
+        ).count()
+
+        remaining_emis = (
+            total_emis - emis_paid
+        )
+
+        # =============================================
+        # FORECLOSURE DETAILS
+        # =============================================
+        foreclosure_amount = None
+
+        foreclosure = db.query(
+            ForeclosureRequest
+        ).filter(
+
+            ForeclosureRequest.application_id
+            == application.id,
+
+            ForeclosureRequest.status
+            == "SUCCESS"
+
+        ).order_by(
+            ForeclosureRequest.id.desc()
+        ).first()
+
+        if foreclosure:
+
+            foreclosure_amount = float(
+                foreclosure.total_amount or 0
+            )
+
         return {
 
-            "application_id": application.id,
+            "id": application.id,
 
             "application_status": (
                 application.application_status
@@ -264,6 +334,25 @@ class LoanApplicationService:
 
             "last_completed_step": (
                 tracker.last_completed_step
+            ),
+
+            # =========================================
+            # EXTRA LOAN DETAILS
+            # =========================================
+            "disbursed_amount": (
+                disbursed_amount
+            ),
+
+            "emis_paid": (
+                emis_paid
+            ),
+
+            "remaining_emis": (
+                remaining_emis
+            ),
+
+            "foreclosure_amount": (
+                foreclosure_amount
             )
         }
 
