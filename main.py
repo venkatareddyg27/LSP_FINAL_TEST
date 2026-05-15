@@ -89,9 +89,11 @@ from routers.Esign.agreement_router import router as agreement_router
 
 
 # ------------------- APP -------------------
-app = FastAPI(title="Loan Service Platform - API")
+app = FastAPI(
+    title="Loan Service Platform - API",
+    lifespan=lifespan
+)
 
-Base.metadata.create_all(bind=engine, checkfirst=True)
 auto_cleanup = AutoCleanup(interval_hours=24)
 
 @asynccontextmanager
