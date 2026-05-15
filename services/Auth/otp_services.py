@@ -371,3 +371,7 @@ def resend_email_otp(
         "message": "Email OTP resent successfully",
         "remaining_resends": MAX_RESEND_ATTEMPTS - otp_row.resend_attempts,
     }
+    
+    
+    
+    
