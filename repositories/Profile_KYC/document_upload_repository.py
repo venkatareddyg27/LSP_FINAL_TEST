@@ -54,9 +54,7 @@ class DocumentUploadRepository:
             existing.match_score = match_score
             existing.ocr_text = ocr_text
             existing.admin_remarks = admin_remarks
-            existing.uploaded_at = uploaded_at
 
-            # Reset review fields on re-upload
             existing.reviewed_at = None
             existing.reviewed_by = None
             existing.ocr_verified = None
@@ -66,7 +64,6 @@ class DocumentUploadRepository:
             }
 
             db.commit()
-
             db.refresh(existing)
 
             return existing
@@ -319,7 +316,6 @@ class DocumentUploadRepository:
 
     # =========================================================================
     # ADMIN UPDATE DOCUMENT
-    # Approve or reject document
     # =========================================================================
     @staticmethod
     def admin_update_document(
@@ -356,6 +352,24 @@ class DocumentUploadRepository:
         db.refresh(doc)
 
         return doc
+
+    # =========================================================================
+    # GET REJECTED DOCUMENTS BEFORE DATE
+    # =========================================================================
+    @staticmethod
+    def get_rejected_documents_before_date(
+        db: Session,
+        before_date: datetime,
+    ) -> list[DocumentUpload]:
+
+        return (
+            db.query(DocumentUpload)
+            .filter(
+                DocumentUpload.status == DocumentStatus.REJECTED,
+                DocumentUpload.uploaded_at < before_date
+            )
+            .all()
+        )
 
     # =========================================================================
     # DELETE DOCUMENT
