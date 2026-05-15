@@ -61,7 +61,6 @@ regex==2025.11.3
 reportlab>=4.0.0
 requests==2.32.5
 rsa==4.9.1
-rapidfuzz
 six==1.17.0
 SQLAlchemy==2.0.46
 starlette==0.52.1
