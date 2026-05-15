@@ -82,3 +82,15 @@ class KYCBankVerificationRepository:
         )
         db.commit()
         return count
+
+    @staticmethod
+    def get_verified_record( db: Session, user_id: int) -> Optional[KYCBankVerification]:
+        return (
+        db.query(KYCBankVerification)
+        .filter(
+            KYCBankVerification.user_id == user_id,
+            KYCBankVerification.status == "VERIFIED"
+        )
+        .order_by(KYCBankVerification.created_at.desc())
+        .first()
+    )

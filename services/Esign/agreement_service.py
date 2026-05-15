@@ -1,5 +1,7 @@
 import os
 
+from fastapi import HTTPException
+
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import SQLAlchemyError
 
@@ -11,12 +13,16 @@ from core.logger import logger
 from core.exceptions import throw_error
 
 from services.Esign.pdf_generator import PDFGenerator
+from core.email_service import EmailService
 
 
 class AgreementService:
 
     def __init__(self, pdf: PDFGenerator):
+
         self.pdf = pdf
+
+        self.email_service = EmailService()
 
     # =====================================================
     # GENERATE / FETCH AGREEMENT
@@ -66,9 +72,12 @@ class AgreementService:
                     == user_profile_id,
 
                     LoanApplication.application_status.in_([
+                        "SUBMITTED",
+                        "UNDER_REVIEW",
                         "APPROVED",
                         "AGREEMENT_GENERATED",
-                        "ESIGN_COMPLETED"
+                        "ESIGN_COMPLETED",
+                        "CLOSED"
                     ])
                 )
 
@@ -81,7 +90,40 @@ class AgreementService:
                 .first()
             )
 
+            # -------------------------------------------------
+            # DEBUG
+            # -------------------------------------------------
             if not application:
+
+                latest_application = (
+
+                    db.query(LoanApplication)
+
+                    .filter(
+                        LoanApplication.user_profile_id
+                        == user_profile_id
+                    )
+
+                    .order_by(
+                        LoanApplication.id.desc()
+                    )
+
+                    .first()
+                )
+
+                print(
+                    "LATEST APPLICATION:",
+                    latest_application.id
+                    if latest_application
+                    else None
+                )
+
+                print(
+                    "LATEST STATUS:",
+                    latest_application.application_status
+                    if latest_application
+                    else "NO APPLICATION"
+                )
 
                 throw_error(
                     (
@@ -101,11 +143,12 @@ class AgreementService:
                 db.query(Agreement)
 
                 .filter(
-
                     Agreement.application_id
-                    == application_id,
+                    == application_id
+                )
 
-                    Agreement.is_active == True
+                .order_by(
+                    Agreement.id.desc()
                 )
 
                 .first()
@@ -121,57 +164,6 @@ class AgreementService:
                     f"found for app={application_id}"
                 )
 
-                # =============================================
-                # BLOCK UNSIGNED AGREEMENT
-                # =============================================
-                if (
-                    str(
-                        existing.esign_status
-                    ).upper()
-                    != "SIGNED"
-                ):
-
-                    return {
-
-                        "exists": True,
-
-                        "agreement_id": (
-                            existing.id
-                        ),
-
-                        "loan_id": (
-                            application_id
-                        ),
-
-                        "status": (
-                            existing.esign_status
-                        ),
-
-                        "pdf_path": (
-                            existing.agreement_pdf_path
-                        ),
-
-                        "signed_pdf_path": None,
-
-                        "message": (
-                            "Please complete e-sign "
-                            "before downloading agreement"
-                        )
-                    }
-
-                # =============================================
-                # SIGNED PDF REQUIRED
-                # =============================================
-                if not existing.signed_pdf_path:
-
-                    throw_error(
-                        "Signed agreement not available",
-                        404
-                    )
-
-                # =============================================
-                # RETURN SIGNED AGREEMENT
-                # =============================================
                 return {
 
                     "exists": True,
@@ -184,17 +176,27 @@ class AgreementService:
                         application_id
                     ),
 
-                    "pdf_path": (
-                        existing.agreement_pdf_path
-                    ),
-
                     "status": (
                         existing.esign_status
+                    ),
+
+                    "pdf_path": (
+                        existing.agreement_pdf_path
                     ),
 
                     "signed_pdf_path": (
                         existing.signed_pdf_path
                     ),
+
+                    "download_url": (
+                        existing.signed_pdf_path
+                        or
+                        existing.agreement_pdf_path
+                    ),
+
+                    "message": (
+                        "Agreement already exists"
+                    )
                 }
 
             # -------------------------------------------------
@@ -317,15 +319,11 @@ class AgreementService:
                 db.query(Agreement)
 
                 .filter(
-
                     Agreement.application_id
-                    == application_id,
-
-                    Agreement.is_active == True
+                    == application_id
                 )
 
                 .update({
-
                     "is_active": False
                 })
             )
@@ -398,15 +396,24 @@ class AgreementService:
                     agreement.esign_status
                 ),
 
-                "signed_pdf_path": None,
+                "signed_pdf_path": (
+                    agreement.signed_pdf_path
+                ),
+
+                "download_url": (
+                    agreement.signed_pdf_path
+                    or
+                    agreement.agreement_pdf_path
+                ),
 
                 "message": (
-                    "Agreement generated successfully. "
-                    "Please complete e-sign to "
-                    "download signed agreement."
+                    "Agreement generated successfully"
                 )
             }
 
+        # =====================================================
+        # DB ERROR
+        # =====================================================
         except SQLAlchemyError as db_err:
 
             import traceback
@@ -428,6 +435,15 @@ class AgreementService:
                 500
             )
 
+        # =====================================================
+        # HTTP EXCEPTION
+        # =====================================================
+        except HTTPException:
+            raise
+
+        # =====================================================
+        # GENERIC ERROR
+        # =====================================================
         except Exception as e:
 
             import traceback
@@ -442,7 +458,10 @@ class AgreementService:
             )
 
             throw_error(
-                str(e),
+                (
+                    "Internal server error: "
+                    f"{str(e)}"
+                ),
                 500
             )
 
@@ -495,9 +514,12 @@ class AgreementService:
                     == user_profile_id,
 
                     LoanApplication.application_status.in_([
+                        "SUBMITTED",
+                        "UNDER_REVIEW",
                         "APPROVED",
                         "AGREEMENT_GENERATED",
-                        "ESIGN_COMPLETED"
+                        "ESIGN_COMPLETED",
+                        "CLOSED"
                     ])
                 )
 
@@ -508,7 +530,40 @@ class AgreementService:
                 .first()
             )
 
+            # -------------------------------------------------
+            # DEBUG
+            # -------------------------------------------------
             if not application:
+
+                latest_application = (
+
+                    db.query(LoanApplication)
+
+                    .filter(
+                        LoanApplication.user_profile_id
+                        == user_profile_id
+                    )
+
+                    .order_by(
+                        LoanApplication.id.desc()
+                    )
+
+                    .first()
+                )
+
+                print(
+                    "LATEST APPLICATION:",
+                    latest_application.id
+                    if latest_application
+                    else None
+                )
+
+                print(
+                    "LATEST STATUS:",
+                    latest_application.application_status
+                    if latest_application
+                    else "NO APPLICATION"
+                )
 
                 return None
 
@@ -520,82 +575,100 @@ class AgreementService:
                 db.query(Agreement)
 
                 .filter(
-
                     Agreement.application_id
-                    == application.id,
+                    == application.id
+                )
 
-                    Agreement.is_active == True
+                .order_by(
+                    Agreement.id.desc()
                 )
 
                 .first()
             )
 
+            # -------------------------------------------------
+            # NO AGREEMENT
+            # -------------------------------------------------
             if not agreement:
 
-                return None
-
-            # =============================================
-            # BLOCK UNSIGNED ACCESS
-            # =============================================
-            if (
-                str(
-                    agreement.esign_status
-                ).upper()
-                != "SIGNED"
-            ):
-
                 return {
 
-                    "agreement_id": (
-                        agreement.id
-                    ),
+                    "message":
+                        "Agreement not generated yet",
 
-                    "message": (
-                        "Please complete e-sign "
-                        "before downloading agreement"
-                    ),
-
-                    "status": (
-                        agreement.esign_status
-                    ),
-
-                    "pdf_path": (
-                        agreement.agreement_pdf_path
-                    ),
-
-                    "signed_pdf_path": None
+                    "loan_id":
+                        application.id
                 }
 
-            # =============================================
-            # SIGNED PDF REQUIRED
-            # =============================================
-            if not agreement.signed_pdf_path:
+            # -------------------------------------------------
+            # DEBUG AGREEMENT
+            # -------------------------------------------------
+            print({
+                "agreement_id": agreement.id,
+                "status": agreement.status,
+                "esign_status": agreement.esign_status,
+                "is_active": agreement.is_active,
+                "pdf_path": agreement.agreement_pdf_path,
+                "signed_pdf_path": agreement.signed_pdf_path
+            })
 
-                return {
+            # -------------------------------------------------
+            # DOWNLOAD PATH
+            # -------------------------------------------------
+            download_path = (
+                agreement.signed_pdf_path
+                or
+                agreement.agreement_pdf_path
+            )
 
-                    "agreement_id": (
-                        agreement.id
-                    ),
+            # -------------------------------------------------
+            # SEND EMAIL
+            # -------------------------------------------------
+            email_sent = False
 
-                    "message": (
-                        "Signed agreement "
-                        "not available"
-                    ),
+            try:
 
-                    "status": (
-                        agreement.esign_status
-                    ),
+                user_email = getattr(
+                    profile,
+                    "email",
+                    None
+                )
 
-                    "pdf_path": (
-                        agreement.agreement_pdf_path
-                    ),
+                if user_email:
 
-                    "signed_pdf_path": None
-                }
+                    self.email_service.send_email_with_attachment(
 
-            # =============================================
-            # RETURN SIGNED PDF
-            # =============================================
+                        to_email=user_email,
+
+                        subject="Loan Agreement Download",
+
+                        body=(
+                            f"Dear "
+                            f"{getattr(profile, 'full_name', 'Customer')},\n\n"
+                            f"Your loan agreement is attached.\n\n"
+                            f"Thank you."
+                        ),
+
+                        attachment_path=download_path
+                    )
+
+                    email_sent = True
+
+                    logger.info(
+                        f"[Agreement] Agreement emailed "
+                        f"to {user_email}"
+                    )
+
+            except Exception as email_error:
+
+                logger.error(
+                    f"[Agreement EMAIL ERROR]: "
+                    f"{str(email_error)}"
+                )
+
+            # -------------------------------------------------
+            # RETURN AGREEMENT
+            # -------------------------------------------------
             return {
 
                 "agreement_id": (
@@ -616,8 +689,24 @@ class AgreementService:
 
                 "signed_pdf_path": (
                     agreement.signed_pdf_path
+                ),
+
+                "download_url": (
+                    download_path
+                ),
+
+                "email_sent": (
+                    email_sent
+                ),
+
+                "message": (
+                    "Agreement downloaded "
+                    "and emailed successfully"
                 )
             }
+
+        except HTTPException:
+            raise
 
         except Exception as e:
 

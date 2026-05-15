@@ -40,6 +40,7 @@ from repositories.Profile_KYC.document_upload_repository import (
 from repositories.Profile_KYC.kyc_bank_verification_repository import (
     KYCBankVerificationRepository
 )
+from services.Profile_KYC.kyc_ocr_service import KYCService
 
 # =========================================================
 # SOCKET TIMEOUT
@@ -251,6 +252,40 @@ class DocumentUploadService:
                     f"{file.content_type}"
                 )
             )
+    @staticmethod
+    def _check_reupload_allowed(
+        db: Session,
+        user_id: int,
+        doc_type: DocumentType,
+    ) -> None:
+
+        existing = DocumentUploadRepository.get_latest_by_type(
+            db, user_id, doc_type
+        )
+
+        if not existing:
+            return  # first-time upload — always allowed
+
+        current_status = (
+            existing.status.value
+            if hasattr(existing.status, "value")
+            else str(existing.status)
+        ).upper()
+
+        if current_status == "APPROVED":
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error":         "Document already approved",
+                    "document_type": doc_type.value,
+                    "message": (
+                        f"{doc_type.value} is already APPROVED "
+                        f"and cannot be re-uploaded."
+                    ),
+                },
+            )
+
+        # REJECTED or UNDER_REVIEW → fall through, allow re-upload
 
     # =====================================================
     # OCR
@@ -271,6 +306,7 @@ class DocumentUploadService:
             raw_text = raw_text[:50000]
 
         return raw_text
+    
 
     # =====================================================
     # OCR VALIDATION
@@ -364,14 +400,9 @@ class DocumentUploadService:
         failed_count = len(
             validation_result.get(
                 "failed_reasons",
-                []
-            )
+                [])
         )
-
-        if failed_count == 1:
-            return 75
-
-        return 40
+        return 75 if failed_count == 1 else 40
 
     # =====================================================
     # DECIDE STATUS
@@ -456,64 +487,91 @@ class DocumentUploadService:
     def delete_document(
         db: Session,
         user_id: int,
-        document_id: int
-    ):
+        document_id: int,
+    ) -> dict:
 
         try:
-
-            document = (
-                DocumentUploadRepository
-                .get_by_id(
-                    db=db,
-                    document_id=document_id
-                )
+            document = DocumentUploadRepository.get_by_id(
+                db=db, document_id=document_id
             )
 
             if not document:
-
                 raise HTTPException(
                     status_code=404,
-                    detail="Document not found"
+                    detail="Document not found",
                 )
 
             if document.user_id != user_id:
-
                 raise HTTPException(
                     status_code=403,
-                    detail="Unauthorized access"
+                    detail="Unauthorized access",
+                )
+                
+            if document.status == "APPROVED":
+                raise HTTPException(
+                   status_code=400,
+                   detail="Approved documents cannot be deleted",
+            )
+
+            # ── Delete from Cloudinary ────────────────────────────
+            try:
+                extracted_data       = document.extracted_data or {}
+                cloudinary_public_id = extracted_data.get(
+                    "cloudinary_public_id"
                 )
 
+                if cloudinary_public_id:
+                    resource_type = "image"
+
+                    if document.file_name:
+                        if document.file_name.lower().endswith(".pdf"):
+                            resource_type = "raw"
+
+                    cloudinary.uploader.destroy(
+                        cloudinary_public_id,
+                        resource_type=resource_type,
+                    )
+
+                    logger.info(
+                        f"[CLOUDINARY DELETE] "
+                        f"public_id={cloudinary_public_id}, "
+                        f"resource_type={resource_type}"
+                    )
+
+            except Exception as cloudinary_error:
+                logger.exception("[CLOUDINARY DELETE ERROR]")
+                raise HTTPException(
+                    status_code=500,
+                    detail=(
+                        f"Cloudinary delete failed: "
+                        f"{str(cloudinary_error)}"
+                    ),
+                )
+
+            # ── Delete DB record ──────────────────────────────────
             DocumentUploadRepository.delete_document(
-                db=db,
-                document=document
+                db=db, document=document
+            )
+
+            logger.info(
+                f"[DOCUMENT DELETED] "
+                f"user={user_id}, document_id={document_id}"
             )
 
             return {
-
-                "success": True,
-
+                "success":     True,
                 "document_id": document_id,
-
-                "message": (
-                    "Document deleted successfully"
-                )
+                "message":     "Document deleted successfully",
             }
 
         except HTTPException:
             raise
 
         except Exception as e:
-
-            logger.exception(
-                "[DELETE DOCUMENT ERROR]"
-            )
-
+            logger.exception("[DELETE DOCUMENT ERROR]")
             raise HTTPException(
                 status_code=500,
-                detail=(
-                    f"Failed to delete document: "
-                    f"{str(e)}"
-                )
+                detail=f"Failed to delete document: {str(e)}",
             )
 
     # =====================================================
@@ -524,201 +582,131 @@ class DocumentUploadService:
         db: Session,
         user_id: int,
         file: UploadFile,
-        doc_type: DocumentType
-    ):
+        doc_type: DocumentType,
+    ) -> dict:
 
-        user = (
-            UserRepository
-            .get_by_user_id(
-                db,
-                user_id
-            )
-        )
+        # ── Fetch user ────────────────────────────────────────────
+        user = UserRepository.get_by_user_id(db, user_id)
 
         if not user:
-
             raise HTTPException(
                 status_code=404,
-                detail="User not found"
+                detail="User not found",
             )
 
+        # ── Re-upload guard ───────────────────────────────────────
+        # Blocks only when existing document is APPROVED.
+        # REJECTED / UNDER_REVIEW always allowed.
+        DocumentUploadService._check_reupload_allowed(
+            db, user_id, doc_type
+        )
+
+        # ── Read file ─────────────────────────────────────────────
         file.file.seek(0)
-
-        content = file.file.read()
-
+        content   = file.file.read()
         file_size = len(content)
 
-        DocumentUploadService._validate_file(
-            file,
-            doc_type,
-            file_size
-        )
+        DocumentUploadService._validate_file(file, doc_type, file_size)
 
         safe_filename = re.sub(
-            r'[^A-Za-z0-9._-]',
-            '_',
-            file.filename
+            r'[^A-Za-z0-9._-]', '_', file.filename
         )
-
-        ext = os.path.splitext(
-            safe_filename
-        )[1]
-
+        ext       = os.path.splitext(safe_filename)[1]
         temp_path = (
-            f"temp_{datetime.utcnow().timestamp()}"
-            f"{ext}"
+            f"temp_{datetime.utcnow().timestamp()}{ext}"
         )
 
         try:
-
-            with open(
-                temp_path,
-                "wb"
-            ) as f:
-
+            with open(temp_path, "wb") as f:
                 f.write(content)
 
+            # ── OCR + validation ──────────────────────────────────
             if doc_type == DocumentType.AADHAAR_BACK:
-
-                raw_text = ""
-
+                # Skip OCR for back side — auto-approve
+                raw_text          = ""
                 validation_result = {
-
-                    "comparison": {
-                        "verified": True
-                    },
-
-                    "failed_reasons": []
+                    "comparison":     {"verified": True},
+                    "failed_reasons": [],
                 }
 
             else:
+                raw_text = DocumentUploadService._run_ocr(temp_path)
 
-                raw_text = (
-                    DocumentUploadService
-                    ._run_ocr(temp_path)
-                )
-
+                # Fetch verified bank record for bank statement check
                 bank_record = None
-
                 if doc_type == DocumentType.BANK_STATEMENT:
-
                     bank_record = (
                         KYCBankVerificationRepository
-                        .get_verified_record(
-                            db,
-                            user_id
-                        )
+                        .get_verified_record(db, user_id)
                     )
 
-                validation_result = (
-                    DocumentUploadService
-                    ._validate_ocr(
-                        doc_type,
-                        raw_text,
-                        user,
-                        bank_record
-                    )
+                validation_result = DocumentUploadService._validate_ocr(
+                    doc_type,
+                    raw_text,
+                    user,
+                    bank_record=bank_record,
                 )
 
-            score = (
-                DocumentUploadService
-                ._calculate_score(
-                    validation_result
+            # ── Score + status ────────────────────────────────────
+            score  = DocumentUploadService._calculate_score(
+                validation_result
+            )
+            status = DocumentUploadService._decide_status(score)
+
+            # ocr_verified: 1 = passed, 0 = failed, None = not run
+            ocr_verified = None
+            if doc_type != DocumentType.AADHAAR_BACK:
+                ocr_verified = (
+                    1
+                    if validation_result
+                    .get("comparison", {})
+                    .get("verified", False)
+                    else 0
                 )
+
+            # ── Cloudinary upload ─────────────────────────────────
+            public_id = generate_cloudinary_public_id(
+                user_id, doc_type.value
             )
 
-            status = (
-                DocumentUploadService
-                ._decide_status(
-                    score
-                )
+            upload_result = DocumentUploadService._upload_to_cloudinary(
+                temp_path = temp_path,
+                folder    = f"loan_kyc/{user_id}",
+                public_id = public_id,
             )
 
-            public_id = (
-                generate_cloudinary_public_id(
-                    user_id,
-                    doc_type.value
-                )
+            # ── Persist to DB ─────────────────────────────────────
+            document = DocumentUploadRepository.create_or_replace_document(
+                db                   = db,
+                user_id              = user_id,
+                email                = user.email,
+                document_type        = doc_type,
+                file_name            = safe_filename,
+                file_path            = upload_result["url"],
+                file_size            = file_size,
+                mime_type            = file.content_type,
+                cloudinary_public_id = upload_result["public_id"],
+                status               = status,
+                match_score          = float(score),
+                ocr_text             = (
+                    raw_text[:10000] if raw_text else None
+                ),
+                admin_remarks        = ", ".join(
+                    validation_result.get("failed_reasons", [])
+                ) or None,
+                uploaded_at          = datetime.now(timezone.utc),
             )
 
-            upload_result = (
-                DocumentUploadService
-                ._upload_to_cloudinary(
-
-                    temp_path=temp_path,
-
-                    folder=(
-                        f"loan_kyc/{user_id}"
-                    ),
-
-                    public_id=public_id
-                )
-            )
-
-            document = (
-                DocumentUploadRepository
-                .create_or_replace_document(
-                    db=db,
-
-                    user_id=user_id,
-
-                    email=user.email,
-
-                    document_type=doc_type,
-
-                    file_name=safe_filename,
-
-                    file_path=upload_result["url"],
-
-                    file_size=file_size,
-
-                    mime_type=file.content_type,
-
-                    cloudinary_public_id=(
-                        upload_result["public_id"]
-                    ),
-
-                    status=status,
-
-                    match_score=float(score),
-
-                    ocr_text=(
-                        raw_text[:10000]
-                        if raw_text
-                        else None
-                    ),
-
-                    admin_remarks=(
-                        ", ".join(
-                            validation_result.get(
-                                "failed_reasons",
-                                []
-                            )
-                        ) or None
-                    ),
-
-                    uploaded_at=(
-                        datetime.now(
-                            timezone.utc
-                        )
-                    ),
-                )
-            )
-
-            ocr_verified = (
-
-                1
-
-                if validation_result
-                .get("comparison", {})
-                .get("verified", False)
-
-                else 0
-            )
-
+            # Persist ocr_verified separately (not in create_or_replace
+            # signature to keep it clean)
             document.ocr_verified = ocr_verified
-
             db.commit()
+
+            logger.info(
+                f"[DOCUMENT UPLOADED] "
+                f"user={user_id}, type={doc_type.value}, "
+                f"status={status.value}, score={score}"
+            )
 
             return {
 
@@ -951,41 +939,26 @@ class DocumentUploadService:
         ]
 
         return {
-
             "user_id": user_id,
 
-            "email": (
-                user.email
-                if user else None
-            ),
+            "email": user.email,
 
             "uploaded_documents": uploaded_documents,
 
-            "total_uploaded": (
-                len(uploaded_documents)
-            ),
+            "total_uploaded": len(uploaded_documents),
 
-            "total_failed": (
-                len(failed_documents)
-            ),
+            "total_failed": len(failed_documents),
 
-            "failed_documents": (
-                failed_documents
-            ),
+            "failed_documents": failed_documents,
 
-            "missing_documents": (
-                missing_documents
-            ),
+            "missing_documents": missing_documents,
 
             "all_required_uploaded": (
                 len(missing_documents) == 0
             ),
 
-            "message": (
-                "Documents upload completed"
-            )
+            "message": "Documents upload completed"
         }
-
     # =====================================================
     # LIST DOCUMENTS
     # =====================================================

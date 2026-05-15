@@ -79,7 +79,6 @@ from routers.Support.faq import router as faq_router
 from routers.Support.chat import router as chat_router
 from routers.Support.complaint import router as complaint_router
 from routers.Support.contact import router as contact_router
-from routers.Support.grievance import router as grievance_router
 from routers.Support.support_dashboard import (
     router as support_dashboard_router)
 from routers.Support.complaint_reply import router as complaint_reply_router
@@ -197,7 +196,6 @@ app.include_router(faq_router)
 app.include_router(chat_router)
 app.include_router(complaint_router)
 app.include_router(contact_router)
-app.include_router(grievance_router)
 app.include_router(
     support_dashboard_router)
 app.include_router(complaint_reply_router)
