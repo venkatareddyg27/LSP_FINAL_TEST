@@ -73,11 +73,6 @@ def send_otp(
         db.add(user)
         db.flush()
 
-    # ❗ DO NOT BLOCK VERIFIED USERS
-    # Verified users may need OTP for:
-    # - Login 2FA
-    # - New device
-    # - Password reset
 
     # Expire old OTPs of same purpose
     db.query(OTPVerification).filter(
@@ -103,7 +98,8 @@ def send_otp(
 
     db.add(otp_row)
     db.commit()
-
+    print("send_otp function called", flush=True)
+    print(f"Generated OTP: {otp}", flush=True)
     send_msg91_otp(mobile_number, otp)
 
     return {"message": "OTP sent successfully"}
