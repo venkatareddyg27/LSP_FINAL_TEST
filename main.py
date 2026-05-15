@@ -88,12 +88,6 @@ from routers.Esign.agreement_router import router as agreement_router
 
 
 
-# ------------------- APP -------------------
-app = FastAPI(
-    title="Loan Service Platform - API",
-    lifespan=lifespan
-)
-
 auto_cleanup = AutoCleanup(interval_hours=24)
 
 @asynccontextmanager
@@ -105,6 +99,12 @@ async def lifespan(app: FastAPI):
     yield
     auto_cleanup.stop()
     print("Auto cleanup service stopped")
+
+
+app = FastAPI(
+    title="Loan Service Platform - API",
+    lifespan=lifespan
+)
 
 # ------------------- STARTUP -------------------
 @app.on_event("startup")
