@@ -107,47 +107,44 @@ app = FastAPI(
 )
 
 # ------------------- STARTUP -------------------
-@app.on_event("startup")
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    Base.metadata.create_all(bind=engine, checkfirst=True)
 
-async def startup():
- 
     db = SessionLocal()
- 
+
     try:
- 
         print("SUPER_ADMIN_NAME:", settings.SUPER_ADMIN_NAME)
-
         print("SUPER_ADMIN_MOBILE:", settings.SUPER_ADMIN_MOBILE)
- 
+
         if settings.SUPER_ADMIN_MOBILE and settings.SUPER_ADMIN_PASSWORD:
- 
             print("Creating Super Admin...")
- 
+
             create_default_super_admin(
-
                 db,
-
                 settings.SUPER_ADMIN_NAME,
-
                 settings.SUPER_ADMIN_MOBILE,
-
                 settings.SUPER_ADMIN_PASSWORD,
-
                 settings.SUPER_ADMIN_DEVICE_ID,
-
             )
- 
+
             print("Super Admin Done")
- 
+
         seed_all(db)
- 
+
     except Exception as e:
-
         print("STARTUP ERROR:", str(e))
- 
-    finally:
 
+    finally:
         db.close()
+
+    auto_cleanup.start()
+    print("Auto cleanup service started")
+
+    yield
+
+    auto_cleanup.stop()
+    print("Auto cleanup service stopped")
  
 
 
