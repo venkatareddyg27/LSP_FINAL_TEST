@@ -35,8 +35,9 @@ def create_default_super_admin(
         db.add(super_admin)
         db.commit()
         db.refresh(super_admin)
-
+        print("Super admin created successfully.")
 
     except Exception as e:
         db.rollback()
+        print("Error creating super admin: {}".format(e))
     return super_admin
