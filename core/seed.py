@@ -1,6 +1,6 @@
 import os
 from sqlalchemy.orm import Session
-
+from core.database import SessionLocal
 from models.Auth.user import User
 from core.security import hash_password
 
