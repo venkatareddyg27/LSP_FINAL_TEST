@@ -149,8 +149,8 @@ app = FastAPI(
 
 #         db.close()
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
+@app.on_event("startup")
+def startup():
     Base.metadata.create_all(bind=engine, checkfirst=True)
 
     db = SessionLocal()
@@ -169,19 +169,14 @@ async def lifespan(app: FastAPI):
 
         seed_all(db)
 
+        auto_cleanup.start()
+        print("Auto cleanup service started")
+
     except Exception as e:
         print("STARTUP ERROR:", repr(e))
 
     finally:
         db.close()
-
-    auto_cleanup.start()
-    print("Auto cleanup service started")
-
-    yield
-
-    auto_cleanup.stop()
-    print("Auto cleanup service stopped")
  
  
 
