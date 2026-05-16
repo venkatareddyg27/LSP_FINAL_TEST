@@ -1,6 +1,6 @@
 import os
 from sqlalchemy.orm import Session
-from core.database import SessionLocal
+
 from models.Auth.user import User
 from core.security import hash_password
 
@@ -27,8 +27,6 @@ def create_default_super_admin(
         if existing:
             print("✅ SUPER ADMIN ALREADY EXISTS")
             return existing
-
-        print("Creating new super admin...")
 
         super_admin = User(
             username=username,
